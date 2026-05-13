@@ -1,0 +1,35 @@
+# Python
+venv/
+backend/venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Environment variables / secrets
+.env
+*.env
+
+# Node / React
+frontend/node_modules/
+frontend/dist/
+
+# Database / vector DB / local storage
+chroma_db/
+backend/chroma_db/
+*.db
+*.sqlite
+*.sqlite3
+
+# Uploaded files / private data
+uploads/
+backend/uploads/
+data/
+*.pdf
+*.docx
+*.xlsx
+*.csv
+*.jsonl
+
+# System files
+.DS_Store

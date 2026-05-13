@@ -1,0 +1,58 @@
+from langchain_ollama import OllamaEmbeddings
+from langchain_chroma import Chroma
+from langchain_core.documents import Document # Import Document class
+import os # Import os module to set environment variable
+import pandas as pd
+from pathlib import Path
+
+from fhir_extract import iter_all_resources, get_ref_id, first_coding # Import functions from fhir_extract
+
+from langchain_core.documents import Document
+from langchain_community.document_loaders import PyPDFLoader
+#load PDF files
+loader = PyPDFLoader("emergency-medical-care.pdf")
+
+
+
+RAW = Path("fhir")
+
+paths = list(RAW.rglob("*"))
+files = [p for p in paths if p.is_file()]
+
+print(f"Raw root: {RAW.resolve()}")
+print(f"Total files: {len(files)}")
+
+# show extension counts
+from collections import Counter
+exts = Counter([p.suffix.lower() for p in files])
+print("Top extensions:", exts.most_common(20))
+
+# show sample files
+print("\nSample files:")
+for p in files[:30]:
+    print(" -", p)
+
+
+df = pd.read_csv("data.csv")
+embeddings = OllamaEmbeddings(model="mxbai-embedding-large")
+
+db_dir = "./chroma_db"
+add_docs = not os.path.exists(db_dir) or len(os.listdir(db_dir)) == 0
+
+if add_docs:
+    ids =[]
+    documents =[]
+    for id, row in df.iterrows():
+        doc = Document(page_content=row["text"], metadata={"source": row["source"]})
+        documents.append(doc)
+        ids.append(str(id))
+
+
+db = Chroma(collection_name="my_collection", embedding_function=embeddings, persist_directory=db_dir)
+if add_docs:
+    db.add_documents(documents=documents, ids=ids)
+
+#create retriever
+retriever = db.as_retriever(
+    search_kwargs={"k": 5}
+)
