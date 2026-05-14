@@ -1,6 +1,10 @@
 import { useState } from "react";
 import "./App.css";
 
+const API_URL = import.meta.env.VITE_API_URL;
+
+
+
 function App() {
   const [question, setQuestion] = useState("");
   const [sessionId, setSessionId] = useState("");
@@ -36,7 +40,7 @@ function App() {
     setAudioUrl("");
 
     try {
-      const response = await fetch("http://localhost:8000/chat", {
+      const response = await fetch("${API_URL}/chat", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -88,7 +92,7 @@ function App() {
     setAudioUrl("");
 
     try {
-      const response = await fetch("http://localhost:8000/speak", {
+      const response = await fetch("${API_URL}/speak", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -133,7 +137,7 @@ function App() {
     try {
       const parsedData = JSON.parse(chartInput);
 
-      const response = await fetch("http://localhost:8000/chart", {
+      const response = await fetch("${API_URL}/chart", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
