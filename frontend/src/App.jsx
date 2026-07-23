@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import "./App.css";
 import {
   Upload,
@@ -22,6 +22,7 @@ const ENDPOINTS = {
   speak: `${API_URL}/speak`,
   chart: `${API_URL}/chart`,
   extract: `${API_URL}/extract`,
+  document: `${API_URL}/documents`,
 };
 
 export default function App() {
@@ -33,7 +34,7 @@ export default function App() {
   const [sessionId, setSessionId] = useState("");
   const [messages, setMessages] = useState([]);
   const [context, setContext] = useState([]);
-  const [extraction, setExtraction] = useState(null);
+ 
 
   const [audioUrl, setAudioUrl] = useState("");
   const [loading, setLoading] = useState(false);
@@ -50,6 +51,11 @@ export default function App() {
   const [chartUrl, setChartUrl] = useState("");
   const [chartLoading, setChartLoading] = useState(false);
 
+  const [documents, setDocuments] = useState([]);
+  const [selectedFile, setSelectedFile] = useState("");
+  const [extraction, setExtraction] = useState(null);
+  const [extracting, setExtracting] = useState(false);
+
   const exampleQuestions = [
     "What is the final diagnosis?",
     "What specimen was submitted?",
@@ -59,6 +65,9 @@ export default function App() {
     "Summarize this case in one paragraph.",
   ];
 
+
+
+
   const fileLabel = useMemo(() => {
     if (!file) return "Choose a pathology report or synthetic EHR document";
     return `${file.name} (${Math.round(file.size / 1024)} KB)`;
@@ -67,6 +76,30 @@ export default function App() {
   const lastAssistantMessage = useMemo(() => {
     return [...messages].reverse().find((msg) => msg.role === "assistant");
   }, [messages]);
+
+
+  async function loadDocuments() {
+    try {
+      const res = await fetch(ENDPOINTS.documents);
+
+      if (!res.ok) {
+        throw new Error(`Failed to load documents with status ${res.status}`);
+      }
+
+      const data = await res.json();
+      console.log("Documents from uploads folder:", data);
+
+      setDocuments(data.documents || []);
+    } catch (err) {
+      console.error("Failed to load documents:", err);
+      setError("Failed to load documents from uploads folder.");
+    }
+  }
+
+  useEffect(() => {
+    loadDocuments();
+  }, []);
+
 
   async function handleUpload() {
     if (!file) {
@@ -94,6 +127,8 @@ export default function App() {
       const data = await response.json();
       setUploadStatus("success");
       setUploadMessage(data.message || "Document uploaded and indexed successfully.");
+
+      await loadDocuments();
 
       if (data.session_id) {
         setSessionId(data.session_id);
@@ -159,31 +194,71 @@ export default function App() {
     }
   }
 
-  async function handleExtract() {
-    setError("");
+
+
+  const parseExtraction = (value) => {
+    if (!value) return null;
+
+    if (typeof value === "object") {
+      return value;
+    }
+
+    if (typeof value === "string") {
+      try {
+        return JSON.parse(value);
+      } catch {
+        return { raw_output: value };
+      }
+    }
+
+    return { raw_output: String(value) };
+  };
+
+  const handleExtract = async () => {
+    if (!selectedFile) {
+      alert("Please select a document first.");
+      return;
+    }
+
+    setExtracting(true);
     setExtraction(null);
-    setLoading(true);
+    setError("");
 
     try {
-      const response = await fetch(ENDPOINTS.extract, {
+      const res = await fetch(ENDPOINTS.extract, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ session_id: sessionId || null }),
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          filename: selectedFile,
+        }),
       });
 
-      if (!response.ok) {
-        throw new Error(`Extraction request failed with status ${response.status}`);
+      if (!res.ok) {
+        throw new Error(`Extraction failed with status ${res.status}`);
       }
 
-      const data = await response.json();
-      setExtraction(data.extraction || data.structured_data || data);
+      const data = await res.json();
+      console.log("Extraction response:", data);
+
+      const parsed = parseExtraction(data.extraction || data);
+      setExtraction(parsed);
     } catch (err) {
-      console.error(err);
-      setError(err.message || "Structured extraction failed. If your backend does not have /extract yet, add it later or hide this button for now.");
+      console.error("Extraction failed:", err);
+      setError(err.message || "Extraction failed. Please check backend logs.");
     } finally {
-      setLoading(false);
+      setExtracting(false);
     }
-  }
+  };
+
+
+
+
+  
+
+
+  
 
   async function handleSpeakLastAnswer() {
     if (!lastAssistantMessage) return;
@@ -422,9 +497,54 @@ export default function App() {
               </div>
             </Card>
 
+
             <Card title="Structured extraction" icon={<FileText size={20} />}>
-              {extraction ? <StructuredData data={extraction} /> : <EmptyState text="Click Extract fields to display diagnosis, specimen, margins, lymph nodes, biomarkers, and other key fields." />}
+              <div className="space-y-4">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                    Select file from uploads folder
+                  </label>
+
+                  <select
+                    value={selectedFile}
+                    onChange={(e) => {
+                      setSelectedFile(e.target.value);
+                      setExtraction(null);
+                    }}
+                    className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm"
+                  >
+                    <option value="">Choose a file...</option>
+
+                    {documents.map((filename) => (
+                      <option key={filename} value={filename}>
+                        {filename}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <button
+                  onClick={handleExtract}
+                  disabled={!selectedFile || extracting}
+                  className="rounded-lg bg-black px-4 py-2 text-sm text-white disabled:opacity-50"
+                >
+                  {extracting ? "Extracting..." : "Extract fields"}
+                </button>
+
+                {extraction ? (
+                  <>
+                    <p className="text-sm text-gray-500">
+                      Extracted from: {selectedFile}
+                    </p>
+                    <StructuredData data={extraction} />
+                  </>
+                ) : (
+                  <EmptyState text="Select a file from the uploads folder, then click Extract fields." />
+                )}
+              </div>
             </Card>
+
+            
 
             <Card title="Retrieved context" icon={<Database size={20} />}>
               {Array.isArray(context) && context.length > 0 ? (

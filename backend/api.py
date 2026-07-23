@@ -1,7 +1,7 @@
 from pathlib import Path
 from typing import Optional, List, Dict, Any
 
-from fastapi import FastAPI, UploadFile, File, Request
+from fastapi import FastAPI, UploadFile, File, Request, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -28,6 +28,9 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
 
+
+
+
 #static folder
 BASE_DIR = Path(__file__).resolve().parent
 
@@ -45,6 +48,8 @@ STATIC_DIR.mkdir(exist_ok=True)
 
 CHART_DIR = STATIC_DIR/"charts"
 CHART_DIR.mkdir(exist_ok=True)
+
+SUPPORTED_EXTENSIONS = {".pdf", ".txt", ".md"}
 
 
 
@@ -125,6 +130,10 @@ class ChartResponse(BaseModel):
 
 class CreateSessionRequest(BaseModel):
     title: str = "New Chat"
+
+
+class ExtractRequest(BaseModel):
+    filename: str
 
 
 @app.get("/")
@@ -277,6 +286,16 @@ def clear_messages(session_id: str):
     return clear_chat_session(session_id=session_id)
 
 
+@app.get("/documents")
+def list_documents():
+    files = []
+
+    for file in UPLOAD_DIR.iterdir():
+        if file.is_file() and file.suffix.lower() in SUPPORTED_EXTENSIONS:
+            files.append(file.name)
+
+    return {"documents": sorted(files)}
+
 @app.post("/speak", response_model=SpeakResponse)
 def speak_answer(request: SpeakRequest):
     result = speak_text_to_audio_file(
@@ -386,75 +405,65 @@ async def generate_chart(payload: ChartRequest, request: Request):
         "chart_url": chart_url
     }
 
+
+
 @app.post("/extract")
-async def extract_structured_fields(payload: Dict[str, Any] = {}):
-    query = """
-    final diagnosis specimen type tumor site margin status lymph node metastasis biomarkers
-    immunohistochemistry molecular pathology pathology report
-    """
+def extract_fields(request: ExtractRequest):
+    safe_name = Path(request.filename).name
+    file_path = UPLOAD_DIR / safe_name
 
-    docs, context_items = retrieve_context(query, k=8)
+    if not file_path.exists():
+        raise HTTPException(status_code=404, detail="File not found")
 
-    if not docs:
-        return {
-            "extraction": {
-                "diagnosis": "No indexed document found.",
-                "specimen_type": "No indexed document found.",
-                "tumor_site": "No indexed document found.",
-                "margin_status": "No indexed document found.",
-                "lymph_node_status": "No indexed document found.",
-                "biomarkers": "No indexed document found.",
-                "summary": "Please upload a document first.",
-            },
-            "context": [],
-        }
+    text = load_file_text(file_path)
 
-    context_text = "\n\n".join(
-        [
-            f"Source: {doc.metadata.get('source', 'unknown')}\n{doc.page_content}"
-            for doc in docs
-        ]
-    )
+    if not text.strip():
+        raise HTTPException(status_code=400, detail="No readable text found in file")
+
+    # avoid sending a huge document to local LLM
+    context = text[:12000]
 
     prompt = f"""
-You are extracting structured information from pathology reports.
+You are a pathology information extraction assistant.
 
-Use only the provided context.
+Extract structured information from the following pathology report.
 
-Return valid JSON only.
-Do not add markdown.
-Do not add explanation outside JSON.
+Return only valid JSON with these keys:
+diagnosis
+specimen_type
+tumor_site
+margin_status
+lymph_node_status
+biomarkers
+summary
 
-Fields:
-- diagnosis
-- specimen_type
-- tumor_site
-- margin_status
-- lymph_node_status
-- biomarkers
-- immunohistochemistry
-- molecular_findings
-- summary
+If a field is not found, use "Not mentioned".
 
-If a field is not mentioned, use "Not mentioned".
-
-Context:
-{context_text}
-
-JSON:
+Report:
+{context}
 """
 
-    raw_output = llm.invoke(prompt)
-
-    try:
-        extraction = json.loads(raw_output)
-    except json.JSONDecodeError:
-        extraction = {
-            "raw_extraction": raw_output,
-            "note": "Model did not return valid JSON. Displaying raw extraction.",
-        }
+    result = llm.invoke(prompt)
 
     return {
-        "extraction": extraction,
-        "context": context_items,
+        "filename": safe_name,
+        "extraction": result
     }
+
+
+def load_file_text(file_path: Path) -> str:
+    suffix = file_path.suffix.lower()
+
+    if suffix in [".txt", ".md"]:
+        return file_path.read_text(encoding="utf-8", errors="ignore")
+
+    if suffix == ".pdf":
+        from langchain_community.document_loaders import PyPDFLoader
+
+        loader = PyPDFLoader(str(file_path))
+        pages = loader.load()
+        return "\n\n".join(page.page_content for page in pages)
+
+    raise HTTPException(status_code=400, detail="Unsupported file type")
+
+
